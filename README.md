@@ -8,7 +8,7 @@ We want you to have access to the combined power of the Bandwidth WebRTC solutio
 
 This app runs an HTTP server that pushes a rudimentary React page, and then listens for requests from your browser to get connection information. The page will register itself when the main page launches, and establish the initial configuration that is used for subsequent telephone calls to all of those telephones out there in the real world.
 
-<img src="./webrtc-voiceconf-ts.svg">
+<img src="./webrtc-voicebridge-ts.svg">
 
 The app creates a connection topology that uses the Bandwidth WebRTC capabilities to control the Browser media streams, and the Bandwidth Programmable Voice <Bridge> capabilities to control calls to telephones.
 

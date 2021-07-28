@@ -170,10 +170,6 @@ app.post("/bridgeCallAnswered", async (req, res) => {
 
   console.log(callId);
 
-  // const bri = new Bridge({
-  //     callId: callId
-  // });
-
   var speakSentence = new SpeakSentence({
     sentence: "Make a call and wait for the answer",
   });

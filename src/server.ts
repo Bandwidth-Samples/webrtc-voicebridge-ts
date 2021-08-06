@@ -37,10 +37,10 @@ const voiceApplicationPhoneNumber = <string>process.env.BW_NUMBER; // the 'from'
 const voiceApplicationId = <string>process.env.BW_VOICE_APPLICATION_ID;
 const voiceCallbackUrl = <string>process.env.BASE_CALLBACK_URL;
 
-console.log(
-  "call control url is...",
-  process.env.BANDWIDTH_WEBRTC_CALL_CONTROL_URL
-);
+// console.log(
+//   "call control url is...",
+//   process.env.BANDWIDTH_WEBRTC_CALL_CONTROL_URL
+// );
 const callControlUrl = `${process.env.BANDWIDTH_WEBRTC_CALL_CONTROL_URL}/accounts/${accountId}`;
 
 // Check to make sure required environment variables are set
@@ -59,7 +59,7 @@ interface ParticipantInfo {
 interface CallData {
   from: string;
   to: string;
-  bridge: boolean;
+  callType: string;
 }
 
 const webRTCClient = new WebRtcClient({
@@ -102,9 +102,6 @@ app.get("/connectionInfo", async (req, res) => {
     token: webParticipant.token,
     voiceApplicationPhoneNumber: voiceApplicationPhoneNumber,
   });
-  bridgeParticipant = await createParticipant("hello-world-phone");
-  const createCallResponse = await callSipUri(bridgeParticipant);
-  console.log("initial configuration activities in motion");
 });
 
 /**
@@ -119,7 +116,6 @@ app.post("/killConnection", async (req, res) => {
     webParticipant &&
     req.body.participantId == webParticipant.id
   ) {
-    // TODO - move the null check inside of the functions
     console.log("deallocating all configured resources on exit");
     await killSipUriLeg(bridgeParticipant);
     await deleteParticipant(bridgeParticipant);
@@ -145,51 +141,19 @@ app.post("/callPhone", async (req, res) => {
         `missing or incorrectly formatted telephone number${outboundPhoneNumber}`
       );
   }
+  // note that this will initiate the call in parallel with linking V2 voice to WebRTC.
+  // it is assumed that the bridge will succeed before the user answers and the
+  //     answer is processed - the completion of the sip bridge could be
+  //     waited on, but that will simply be treated as an error at this time.
+  bridgeParticipant = await createParticipant("hello-world-phone");
+  callSipUri(bridgeParticipant);
   await callPhone(outboundPhoneNumber);
   res.status(204).send();
 });
 
 /**
- * the /bridgeCallAnswered api call completes the linkage of the webRTC and
- * V2 Voice environments
- */
-app.post("/bridgeCallAnswered", async (req, res) => {
-  const callId = req.body.callId;
-  console.log(
-    `received answered callback for bridging call ${callId} to ${req.body.to}`
-  );
-
-  // preserve the call-leg
-  let data: CallData = {
-    from: req.body.from,
-    to: req.body.to,
-    bridge: true,
-  };
-
-  voiceCalls.set(callId, data); // preserve the info on the bridge leg in the calls map.
-
-  console.log(callId);
-
-  var speakSentence = new SpeakSentence({
-    sentence: "Make a call and wait for the answer",
-  });
-  var pause = new Pause({
-    duration: 60,
-  });
-
-  var response = new Response();
-  response.add(speakSentence);
-  response.add(pause);
-
-  let myResp = await response.toBxml();
-
-  console.log(myResp);
-  res.send(myResp);
-});
-
-/**
  * Bandwidth's Voice API will hit this endpoint when an outgoing call is answered
- * the outboud call will be connected to a conference bridge
+ * the outbound call will be connected to a conference bridge
  */
 app.post("/callAnswered", async (req, res) => {
   const callId = req.body.callId;
@@ -201,54 +165,106 @@ app.post("/callAnswered", async (req, res) => {
   let data: CallData = {
     from: req.body.from,
     to: req.body.to,
-    bridge: false,
+    callType: "outbound",
   };
 
   voiceCalls.set(callId, data); // preserve the info on the bridge leg in the calls map.
 
-  let bridgecallId: string = "";
-  for (let [key, value] of voiceCalls.entries()) {
-    if (value.bridge) {
-      bridgecallId = key;
-    }
-  }
   // This is the response payload that we will send back to the Voice API to conference the call into the WebRTC session
-
-  var speakSentence = new SpeakSentence({
-    sentence: "The bridge will start now",
-  });
-
-  var bridge = new Bridge({
-    callId: bridgecallId,
-    // bridgeCompleteUrl: `${voiceCallbackUrl}/callStatus`,
-    bridgeTargetCompleteUrl: `${voiceCallbackUrl}/bridgeTargetComplete`,
-  });
-
   var response = new Response();
+  var speakSentence = new SpeakSentence({
+    sentence: "The call will start now",
+  });
   response.add(speakSentence);
-  response.add(bridge);
 
-  let myResp = await response.toBxml();
-  console.log(myResp);
+  const bridgecallId: string = findCall("bridge");
+  if (bridgecallId) {
+    // the sipinterconnect call exists - bridge them
+    var bridge = new Bridge({
+      callId: bridgecallId,
+      bridgeTargetCompleteUrl: `${voiceCallbackUrl}/endBridgeLeg`,
+    });
+
+    response.add(bridge);
+  } else {
+    const pause = new Pause({
+      duration: 120,
+    });
+    response.add(pause);
+  }
+
+  let myResp: string = await response.toBxml();
+  console.log(`Bridging outbound call using Programmable Voice - ${callId}`);
+  console.log("BXML for the answered call: ", myResp);
 
   // Send the payload back to the Voice API
   res.send(myResp);
-  console.log(`Bridging outbound call using Programmable Voice - ${callId}`);
 });
 
+/**
+ * the /bridgeCallAnswered api call completes the linkage of the webRTC and
+ * V2 Voice environments
+ */
+app.post("/bridgeCallAnswered", async (req, res) => {
+  const bridgeCallId = req.body.callId;
+  console.log(
+    `received answered callback SIP to WebRTC Bridge ${bridgeCallId} to ${req.body.to}`
+  );
+
+  // preserve the call-leg
+  let data: CallData = {
+    from: req.body.from,
+    to: req.body.to,
+    callType: "bridge",
+  };
+
+  voiceCalls.set(bridgeCallId, data); // preserve the info on the bridge leg in the calls map.
+
+  var response = new Response();
+  var speakSentence = new SpeakSentence({
+    sentence: `a call is happening`,
+  });
+
+  // if there is another call present, around bridge it in, otherwise wait for another call.
+  let otherCallId = findCall("outbound") || findCall("inbound"); // look for any calls that are hanging around.
+  if (otherCallId) {
+    // there is an existing voice call that should be bridged
+    console.log(
+      "bridge the preexisting voice call: ",
+      otherCallId,
+      voiceCalls.get(otherCallId)
+    );
+    // the sipinterconnect call exists - bridge them
+    var bridge = new Bridge({
+      callId: otherCallId,
+      // flip the 'endedness of the callback on hangup
+      bridgeCompleteUrl: `${voiceCallbackUrl}/endBridgeLeg`,
+    });
+    response.add(bridge);
+  } else {
+    const pause = new Pause({
+      duration: 120,
+    });
+    response.add(pause);
+  }
+
+  let myResp = await response.toBxml();
+  res.send(myResp);
+});
+
+/**
+ * /callStatus handles all call status events - primarily disconnects by the phone
+ */
 app.post("/callStatus", async (req, res) => {
   res.status(200).send();
 
-  console.log("Call Status update: ", req.body);
-
   try {
     if (req.body.eventType === "disconnect") {
-      // Do some cleanup
       const callId = req.body.callId;
       console.log(`received disconnect event for call ${callId}`);
 
       const callData = voiceCalls.get(callId);
-      if (callData?.bridge) {
+      if (callData?.callType === "bridge") {
         // results from disconnecting the bridge - clean up
         deleteParticipant(bridgeParticipant);
       }
@@ -261,38 +277,86 @@ app.post("/callStatus", async (req, res) => {
   }
 });
 
-app.post("/bridgeTargetComplete", async (req, res) => {
-  console.log("bridgeTargetComplete update: ", req.body);
-
+/**
+ * /endBridgeLeg is used to clean up when the phone hangs up, which takes down the bridge
+ * this is triggered by registering a callback when the two calls are bridged.
+ */
+app.post("/endBridgeLeg", async (req, res) => {
   try {
-    if (req.body.eventType === "bridgeTargetComplete") {
+    if (
+      req.body.eventType === "bridgeTargetComplete" ||
+      req.body.eventType === "bridgeComplete"
+    ) {
       // the cleanup should already have been done
       const callId = req.body.callId;
-      console.log(`received Bridge Target Complete event for call ${callId}`);
+      console.log(`received endBridgeLeg event for call ${callId}`);
 
-      var speakSentence = new SpeakSentence({
-        sentence: "Make another call and wait until that call answers",
-      });
+      // remove the SIP interconnect
+      await killSipUriLeg(bridgeParticipant);
+      await deleteParticipant(bridgeParticipant);
+
+      // var speakSentence = new SpeakSentence({
+      //   sentence: "placing another call",
+      // });
       var pause = new Pause({
-        duration: 120,
+        duration: 10,
       });
 
       var response = new Response();
-      response.add(speakSentence);
+      // response.add(speakSentence);
       response.add(pause);
 
       let myResp = await response.toBxml();
-
-      console.log(myResp);
       res.send(myResp);
     } else {
-      console.log("received unexpected status update", req.body);
+      console.log("received unexpected bridge status update", req.body);
       res.status(200).send();
     }
   } catch (e) {
     console.log(`failed to cleanup departing participants...${e}`);
     res.status(200).send();
   }
+});
+
+app.post("/incomingCall", async (req, res) => {
+  console.log(`incoming call received from ${req.body.from}`);
+
+  // setup the interconnection to webRTC
+  bridgeParticipant = await createParticipant("hello-world-phone");
+  await callSipUri(bridgeParticipant);
+
+  // the bridgeCallAnswered will complete the interconnection once the second leg is set up.
+
+  const callId = req.body.callId;
+  const data: CallData = {
+    from: req.body.from,
+    to: req.body.to,
+    callType: "inbound",
+  };
+
+  voiceCalls.set(callId, data); // preserve the info on the inbound call leg in the calls map.
+
+  const speakSentence = new SpeakSentence({
+    sentence: "We're finding the other party",
+  });
+
+  var pause = new Pause({
+    duration: 120,
+  });
+
+  const response = new Response();
+  response.add(speakSentence);
+  response.add(pause); // should be unnecessary, and replaced by the bridge when applied.
+  const myResp: string = await response.toBxml();
+  // Send the payload back to the Voice API
+  res.send(myResp);
+  console.log(`Bridging inbound call using Programmable Voice - ${callId}`);
+});
+
+app.post("/*", (req, res) => {
+  // clean up any spurious messages
+  console.log("something unexpected received", req.url, req.baseUrl, req.body);
+  res.status(200).send();
 });
 
 // These two lines set up static file serving for the React frontend
@@ -348,8 +412,6 @@ const getSessionId = async (): Promise<string> => {
  * Create a new participant and save their ID to our app's state map
  */
 const createParticipant = async (tag: string): Promise<ParticipantInfo> => {
-  // Create a new participant
-  console.log(`creating a participant at ${callControlUrl}/participants`);
   const participantBody: Participant = {
     tag: tag,
     publishPermissions: [PublishPermissionEnum.AUDIO],
@@ -430,7 +492,7 @@ const deleteParticipant = async (participant: ParticipantInfo) => {
 };
 
 /**
- * Ask Bandwidth's Voice API to call the outbound phone number,
+ * Use Bandwidth's Voice API to call the outbound phone number,
  * with an answer callback that will conference the outbound call on the V2 voice
  * side of the infrastructure
  */
@@ -472,7 +534,7 @@ const callSipUri = async (participant: ParticipantInfo) => {
       applicationId: voiceApplicationId,
       uui: `${participant.token};encoding=jwt`,
     };
-    console.log("calling the SIP URL");
+
     let response = await axios.post(
       `https://voice.bandwidth.com/api/v2/accounts/${accountId}/calls`,
       body,
@@ -484,11 +546,23 @@ const callSipUri = async (participant: ParticipantInfo) => {
       }
     );
     const callId = response.data.callId;
-    console.log(`setting calls in SIPURI for ${callId}`);
+    console.log(
+      `establishing a Voice call between Programmable Voice and WebRTC using ${callId}`
+    );
     return response;
   } catch (e) {
     console.log(`error calling sip:sipx.webrtc.bandwidth.com:5060: ${e}`);
   }
+};
+
+const findCall = (callType: string) => {
+  let callId: string = "";
+  for (let [key, value] of voiceCalls.entries()) {
+    if (value.callType === callType) {
+      callId = key;
+    }
+  }
+  return callId;
 };
 
 /**
@@ -500,12 +574,7 @@ const killSipUriLeg = async (participant: Participant) => {
     // kill the call and the conference should come down when empty
     // find the callId
 
-    let callId: string = "";
-    for (let [key, value] of voiceCalls.entries()) {
-      if (value.bridge) {
-        callId = key;
-      }
-    }
+    const callId = findCall("bridge");
 
     if (!callId) {
       console.log(

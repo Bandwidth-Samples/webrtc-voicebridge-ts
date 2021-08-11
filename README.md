@@ -8,7 +8,7 @@ We want you to have access to the combined power of the Bandwidth WebRTC solutio
 
 This app runs an HTTP server that pushes a rudimentary React page, and then listens for requests from your browser to get connection information. The page will register itself when the main page launches, and establish the initial configuration that is used for subsequent telephone calls to all of those telephones out there in the real world.
 
-<img src="./webrtc-voicebridge-ts.svg">
+<img src="./webrtc-voicebridge-ts.png">
 
 The app creates a connection topology that uses the Bandwidth WebRTC capabilities to control the Browser media streams, and the Bandwidth Programmable Voice <Bridge> capabilities to control calls to telephones.
 
@@ -16,7 +16,19 @@ The app establishes a WebRTC Session with two Participants on the WebRTC side of
 
 On the Programmable Voice side of the configuration, the app will establish a 2-party <Bridge>, built upon a call to the WebRTC side of the topology using a SIP INVITE that includes an authentication token, thus interconnecting the two infrastructures with a secured media path.
 
-Once the initial configuration has been established, the browser page can be used to establish outgoing telephone calls. Each time a call is initiated the /call API is used to create the call, and the <Bridge> verb is uses on answering that call to join the voice and wwebRTC 'sides'. This example topology was chosen to demonstrate that once the initial configuration is established, many of the options provided by the comprehensive Programmable Voice product become available. In some sense the WebRTC endpoint is simply one of the legs in a bridged Programmable Voice call.
+Once the initial configuration has been established, the browser page can be used to establish outgoing telephone calls or receive inbound calls. Each time a call is initiated the /call API is used to create the call to both the WebRTC side and the Voice side of the communication, and the <Bridge> verb is uses on answering that call to join the voice and wwebRTC 'sides'. This example topology was chosen to demonstrate that once the initial configuration is established, many of the options provided by the comprehensive Programmable Voice product become available. In some sense the WebRTC endpoint is simply one of the legs in a bridged Programmable Voice call.
+
+## Asycnhronous options
+
+Since the WebRTC and the SIP Voice sides of the communication are established asynchronously, the two Programmable Voice calls that support that communication can be established asynchronously.
+
+An attempt to render this visually for both an outbound call from WebRTC as well as for an inbound call to the WebRTC browser.
+
+![WebRTC to Voice timings](call-setup-timing.png "timings")
+
+The bottom line is that there is sufficient delay in the human interaction parts of making a call that the legs can be set up independently and the call established in the background without impacting the interpersonal communication.
+
+This sample application establishes both inbound and outbound calls in an asynchronous decoupled manner, enabling the setup of the WebRTC interconnection leg to be set up while the normal call handling of the voice leg of the call proceeds, and while the people responding to the calls react. This approach adds complexity to the sample application, but demonstrate the viability of this approach. A sequential approach can also be implemented.
 
 > Note: This is a very simplistic demo and it is not designed to handle multiple browsers or multiple phones.
 > Unless you are running on `localhost`, you will need to use HTTPS. Most modern browsers require a secure context when accessing cameras and microphones.

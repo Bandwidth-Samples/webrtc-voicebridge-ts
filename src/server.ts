@@ -23,12 +23,16 @@ import {
   ApiController as WebRtcController,
   DeviceApiVersionEnum,
 } from "@bandwidth/webrtc";
-import { version } from "os";
+import WebSocket from "ws";
 
 dotenv.config();
 
 const app = express();
 app.use(bodyParser.json());
+
+const wss = new WebSocket.Server({ port: 8001 });
+let clientWs: WebSocket; // for the client signalling websocket
+
 const port = process.env.PORT || 5000;
 const accountId = <string>process.env.BW_ACCOUNT_ID;
 const username = <string>process.env.BW_USERNAME;
@@ -60,6 +64,18 @@ interface CallData {
   from: string;
   to: string;
   callType: string;
+}
+
+interface callState {
+  event: string; // registered, callStateUpdate
+  token?: string;
+  tn?: string;
+  callState?: string;
+}
+
+interface clientEvent {
+  event: string; // outboundCall
+  tn?: string;
 }
 
 const webRTCClient = new WebRtcClient({
@@ -94,13 +110,25 @@ process.on("SIGINT", async function () {
 });
 
 /**
- * The browser will hit this endpoint to get a session and participant ID
+ * set up a websockets connection with the webclient to allow async
+ * notification to be sent to that webclient.
  */
-app.get("/connectionInfo", async (req, res) => {
-  webParticipant = await createParticipant("hello-world-browser");
-  res.send({
-    token: webParticipant.token,
-    voiceApplicationPhoneNumber: voiceApplicationPhoneNumber,
+wss.on("connection", async function connection(ws, req) {
+  registerWebClient(ws);
+
+  ws.on("message", async function incoming(messageBuffer) {
+    const message: clientEvent = JSON.parse(messageBuffer.toString());
+    console.log("handling an incoming client event:", message);
+    switch (message.event) {
+      case "outboundCall":
+        if (message.tn) placeACall(message.tn);
+        break;
+      default:
+        console.log("message from client not recognized: ", message);
+    }
+  });
+  ws.on("close", function closing(message) {
+    console.log("closing the web client connection");
   });
 });
 
@@ -121,39 +149,81 @@ app.post("/killConnection", async (req, res) => {
     await deleteParticipant(bridgeParticipant);
     await deleteParticipant(webParticipant);
     await deleteSession();
+    clientWs.close();
   }
 });
 
 /**
- * The browser will hit this endpoint to initiate a call to the outbound phone number
+ * handle an incoming call that has been placed to the TN that has a
+ * provisioned association with this application
+ * (long story - see setup in the README)
  */
-app.post("/callPhone", async (req, res) => {
-  console.log("calling a phone", req.body.calledTelephoneNumber);
-  const outboundPhoneNumber = req.body.calledTelephoneNumber;
-  if (
-    !outboundPhoneNumber ||
-    !outboundPhoneNumber.match(/^\+1[2-9][0-9]{9}$/)
-  ) {
-    console.log("missing or incorrectly formatted telephone number");
-    res
-      .status(400)
-      .send(
-        `missing or incorrectly formatted telephone number${outboundPhoneNumber}`
-      );
-  }
-  // note that this will initiate the call in parallel with linking V2 voice to WebRTC.
-  // it is assumed that the bridge will succeed before the user answers and the
-  //     answer is processed - the completion of the sip bridge could be
-  //     waited on, but that will simply be treated as an error at this time.
+app.post("/incomingCall", async (req, res) => {
+  console.log(`incoming call received from ${req.body.from}`);
+  updateCallStatus("inbound call");
+
+  // setup the interconnection to webRTC
   bridgeParticipant = await createParticipant("hello-world-phone");
+  // TODO - confirm the async behavior on call setup
   callSipUri(bridgeParticipant);
-  await callPhone(outboundPhoneNumber);
-  res.status(204).send();
+
+  // the bridgeCallAnswered will complete the interconnection once the second leg is set up.
+
+  const callId = req.body.callId;
+  const data: CallData = {
+    from: req.body.from,
+    to: req.body.to,
+    callType: "inbound",
+  };
+
+  voiceCalls.set(callId, data); // preserve the info on the inbound call leg in the calls map.
+
+  const speakSentence = new SpeakSentence({
+    sentence: "We're finding the other party",
+  });
+
+  var pause = new Pause({
+    duration: 120,
+  });
+
+  const response = new Response();
+  response.add(speakSentence);
+  response.add(pause); // should be unnecessary, and replaced by the bridge when applied.
+  const myResp: string = await response.toBxml();
+  // Send the payload back to the Voice API
+  res.send(myResp);
+  console.log(`Bridging inbound call using Programmable Voice - ${callId}`);
+});
+
+/**
+ * /callStatus handles all telephone call status events:
+ *  - primarily disconnects by the phone
+ */
+app.post("/callStatus", async (req, res) => {
+  res.status(200).send();
+
+  try {
+    if (req.body.eventType === "disconnect") {
+      const callId = req.body.callId;
+      console.log(`received disconnect event for call ${callId}`);
+
+      const callData = voiceCalls.get(callId);
+      if (callData?.callType === "bridge") {
+        // results from disconnecting the bridge - clean up
+        deleteParticipant(bridgeParticipant);
+      }
+      voiceCalls.delete(callId);
+    } else {
+      console.log("received unexpected status update", req.body);
+    }
+  } catch (e) {
+    console.log(`failed to cleanup departing participants...${e}`);
+  }
 });
 
 /**
  * Bandwidth's Voice API will hit this endpoint when an outgoing call is answered
- * the outbound call will be connected to a conference bridge
+ * the outbound call will be connected to the bridge
  */
 app.post("/callAnswered", async (req, res) => {
   const callId = req.body.callId;
@@ -250,31 +320,7 @@ app.post("/bridgeCallAnswered", async (req, res) => {
 
   let myResp = await response.toBxml();
   res.send(myResp);
-});
-
-/**
- * /callStatus handles all call status events - primarily disconnects by the phone
- */
-app.post("/callStatus", async (req, res) => {
-  res.status(200).send();
-
-  try {
-    if (req.body.eventType === "disconnect") {
-      const callId = req.body.callId;
-      console.log(`received disconnect event for call ${callId}`);
-
-      const callData = voiceCalls.get(callId);
-      if (callData?.callType === "bridge") {
-        // results from disconnecting the bridge - clean up
-        deleteParticipant(bridgeParticipant);
-      }
-      voiceCalls.delete(callId);
-    } else {
-      console.log("received unexpected status update", req.body);
-    }
-  } catch (e) {
-    console.log(`failed to cleanup departing participants...${e}`);
-  }
+  updateCallStatus("connected");
 });
 
 /**
@@ -308,6 +354,7 @@ app.post("/endBridgeLeg", async (req, res) => {
 
       let myResp = await response.toBxml();
       res.send(myResp);
+      updateCallStatus("idle");
     } else {
       console.log("received unexpected bridge status update", req.body);
       res.status(200).send();
@@ -316,41 +363,6 @@ app.post("/endBridgeLeg", async (req, res) => {
     console.log(`failed to cleanup departing participants...${e}`);
     res.status(200).send();
   }
-});
-
-app.post("/incomingCall", async (req, res) => {
-  console.log(`incoming call received from ${req.body.from}`);
-
-  // setup the interconnection to webRTC
-  bridgeParticipant = await createParticipant("hello-world-phone");
-  await callSipUri(bridgeParticipant);
-
-  // the bridgeCallAnswered will complete the interconnection once the second leg is set up.
-
-  const callId = req.body.callId;
-  const data: CallData = {
-    from: req.body.from,
-    to: req.body.to,
-    callType: "inbound",
-  };
-
-  voiceCalls.set(callId, data); // preserve the info on the inbound call leg in the calls map.
-
-  const speakSentence = new SpeakSentence({
-    sentence: "We're finding the other party",
-  });
-
-  var pause = new Pause({
-    duration: 120,
-  });
-
-  const response = new Response();
-  response.add(speakSentence);
-  response.add(pause); // should be unnecessary, and replaced by the bridge when applied.
-  const myResp: string = await response.toBxml();
-  // Send the payload back to the Voice API
-  res.send(myResp);
-  console.log(`Bridging inbound call using Programmable Voice - ${callId}`);
 });
 
 app.post("/*", (req, res) => {
@@ -367,46 +379,6 @@ app.get("*", (req, res) => {
 app.listen(port, () =>
   console.log(`WebRTC Hello World listening on port ${port}!`)
 );
-
-/**
- * Get a new or existing WebRTC session ID
- */
-const getSessionId = async (): Promise<string> => {
-  // If we already have a valid session going, just re-use that one
-  if (sessionId) {
-    try {
-      let getSessionResponse = await webRTCController.getSession(
-        accountId,
-        sessionId
-      );
-      const existingSession: Session = getSessionResponse.result;
-      console.log(`using session ${sessionId}`);
-      if (existingSession.id === sessionId) {
-        return sessionId;
-      } else
-        throw Error(
-          `saved session IDs don't match ${existingSession.id}, ${sessionId}`
-        );
-    } catch (e) {
-      console.log(`session ${sessionId} is invalid, creating a new session`);
-    }
-  }
-
-  // Otherwise start a new one and return the ID
-  const createSessionBody: Session = {
-    tag: "v2-voice-conference-model",
-  };
-  let response = await webRTCController.createSession(
-    accountId,
-    createSessionBody
-  );
-  if (!response.result.id) {
-    throw Error("No Session ID in Create Session Response");
-  }
-  sessionId = response.result.id;
-  console.log(`created new session ${sessionId}`);
-  return sessionId;
-};
 
 /**
  * Create a new participant and save their ID to our app's state map
@@ -456,6 +428,46 @@ const createParticipant = async (tag: string): Promise<ParticipantInfo> => {
 };
 
 /**
+ * Get a new or existing WebRTC session ID
+ */
+const getSessionId = async (): Promise<string> => {
+  // If we already have a valid session going, just re-use that one
+  if (sessionId) {
+    try {
+      let getSessionResponse = await webRTCController.getSession(
+        accountId,
+        sessionId
+      );
+      const existingSession: Session = getSessionResponse.result;
+      console.log(`using session ${sessionId}`);
+      if (existingSession.id === sessionId) {
+        return sessionId;
+      } else
+        throw Error(
+          `saved session IDs don't match ${existingSession.id}, ${sessionId}`
+        );
+    } catch (e) {
+      console.log(`session ${sessionId} is invalid, creating a new session`);
+    }
+  }
+
+  // Otherwise start a new one and return the ID
+  const createSessionBody: Session = {
+    tag: "v2-voice-conference-model",
+  };
+  let response = await webRTCController.createSession(
+    accountId,
+    createSessionBody
+  );
+  if (!response.result.id) {
+    throw Error("No Session ID in Create Session Response");
+  }
+  sessionId = response.result.id;
+  console.log(`created new session ${sessionId}`);
+  return sessionId;
+};
+
+/**
  * Delete a session
  */
 const deleteSession = async () => {
@@ -485,7 +497,7 @@ const deleteParticipant = async (participant: ParticipantInfo) => {
       // participants can get deleted when the media server detects loss of session / media flows
       console.log("participant already deleted", participant.id);
     } else {
-      console.log("failure to delete participant", participant.id);
+      console.log("failure to delete participant", participant?.id);
       console.log("error", e.request, e.headers, e.statusCode, e.body);
     }
   }
@@ -511,6 +523,7 @@ const callPhone = async (phoneNumber: string) => {
     );
     const callId = response.result.callId;
     console.log(`initiated call ${callId} to ${phoneNumber}...`);
+    updateCallStatus("outbound call");
   } catch (e) {
     console.log(`error calling ${phoneNumber}: ${e}`);
   }
@@ -521,9 +534,7 @@ const callPhone = async (phoneNumber: string) => {
  * participant token in the UUI SIP header to allow the correlation of
  * V2 voice and the webRTC infrastructure
  */
-
 // TODO - upgrade from axios when the SDK supports UUI
-
 const callSipUri = async (participant: ParticipantInfo) => {
   try {
     const body = {
@@ -553,16 +564,6 @@ const callSipUri = async (participant: ParticipantInfo) => {
   } catch (e) {
     console.log(`error calling sip:sipx.webrtc.bandwidth.com:5060: ${e}`);
   }
-};
-
-const findCall = (callType: string) => {
-  let callId: string = "";
-  for (let [key, value] of voiceCalls.entries()) {
-    if (value.callType === callType) {
-      callId = key;
-    }
-  }
-  return callId;
 };
 
 /**
@@ -615,4 +616,64 @@ const killSipUriLeg = async (participant: Participant) => {
     console.log(`failed to kill the sip:sipx.webrtc.bandwidth.com:5060 leg.`);
     console.log(e);
   }
+};
+
+/**
+ * Initialize the relationship with the web client
+ * @param ws the Websocket for communicating with the web client.
+ */
+const registerWebClient = async (ws: WebSocket) => {
+  clientWs = ws; // formally remember the web socket for later use
+  webParticipant = await createParticipant("hello-world-browser");
+  const message: callState = {
+    event: "registered",
+    token: webParticipant.token,
+    tn: voiceApplicationPhoneNumber,
+    callState: "idle",
+  };
+  console.log("Websocket connection established with web client");
+  ws.send(JSON.stringify(message));
+};
+
+/**
+ * place a call to an outbound TN as requested by the webClient
+ * @param tn - the destination phone
+ * @returns
+ */
+const placeACall = async (tn: string) => {
+  console.log("calling a phone", tn);
+  const outboundPhoneNumber = tn;
+  if (
+    !outboundPhoneNumber ||
+    !outboundPhoneNumber.match(/^\+1[2-9][0-9]{9}$/)
+  ) {
+    console.log("missing or incorrectly formatted telephone number");
+    return;
+  }
+  // note that this will initiate the call in parallel with linking V2 voice to WebRTC.
+  // it is assumed that the bridge will succeed before the user answers and the
+  //     answer is processed - the completion of the sip bridge could be
+  //     waited on, but that will simply be treated as an error at this time.
+  bridgeParticipant = await createParticipant("hello-world-phone");
+  callSipUri(bridgeParticipant); // fire and forget
+  callPhone(outboundPhoneNumber); // fire and forget
+};
+
+const findCall = (callType: string) => {
+  let callId: string = "";
+  for (let [key, value] of voiceCalls.entries()) {
+    if (value.callType === callType) {
+      callId = key;
+    }
+  }
+  return callId;
+};
+
+const updateCallStatus = (state: string) => {
+  const message: callState = {
+    event: "callStateUpdate",
+    callState: state,
+  };
+  console.log("updating the call state", message);
+  clientWs.send(JSON.stringify(message));
 };

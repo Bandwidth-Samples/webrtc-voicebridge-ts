@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from "react";
 import "./App.css";
+import { w3cwebsocket as W3CWebSocket } from "websocket";
 
 import BandwidthRtc, { RtcStream } from "@bandwidth/webrtc-browser";
+
+const client = new W3CWebSocket("ws://127.0.0.1:8001");
 
 const bandwidthRtc = new BandwidthRtc();
 
@@ -14,16 +17,54 @@ const App: React.FC = () => {
 
   // This state variable holds the remote stream object - the audio from the phone
   const [remoteStream, setRemoteStream] = useState<RtcStream>();
+  // this state variable holds the call state for display purposes
+  const [callState, setCallState] = useState<string>();
 
   // This effect connects to our server backend to get a device token
   // It will only run the first time this component renders
+
+  /**
+   * what the websocket exchanges with the server
+   * @callState is to the client, and
+   * @clientEvent is to the server
+   */
+
+  interface CallState {
+    event: string; // registered, callStateUpdate
+    token?: string;
+    tn?: string;
+    callState?: string;
+  }
+
+  interface clientEvent {
+    event: string;
+    tn?: string;
+  }
+
   useEffect(() => {
-    fetch("/connectionInfo").then(async (response) => {
-      const responseBody = await response.json();
-      setToken(responseBody.token);
-      setVoiceApplicationPhoneNumber(responseBody.voiceApplicationPhoneNumber);
-      setOutboundPhoneNumber("");
-    });
+    client.onopen = () => {
+      console.log("WebSocket Client Connected");
+    };
+    client.onmessage = (message) => {
+      const parsedMessage: CallState = JSON.parse(message.data.toString());
+      console.log(`${parsedMessage.event} message received`);
+      console.log("message...", parsedMessage);
+      switch (parsedMessage.event) {
+        case "registered": {
+          setToken(parsedMessage.token);
+          setVoiceApplicationPhoneNumber(parsedMessage.tn);
+          setOutboundPhoneNumber("");
+          setCallState("idle");
+          break;
+        }
+        case "callStateUpdate": {
+          setCallState(parsedMessage.callState);
+          break;
+        }
+        default:
+          console.log("error - server message not understood: ", parsedMessage);
+      }
+    };
   }, []);
 
   // This effect will fire when the token changes
@@ -48,6 +89,7 @@ const App: React.FC = () => {
   }, [token]);
 
   // This effect sets up event SDK event handlers for remote streams
+  // fires every time the page is rendered.
   useEffect(() => {
     // This event will fire any time a new stream is sent to us
     bandwidthRtc.onStreamAvailable((rtcStream: RtcStream) => {
@@ -65,20 +107,13 @@ const App: React.FC = () => {
   // Initiate a call to the outbound phone number listed
   const callOutboundPhoneNumber = () => {
     console.log(`calling ${outboundPhoneNumber}`);
-    let data = { calledTelephoneNumber: outboundPhoneNumber };
-    fetch("/callPhone", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(data),
-    }).then(async (response) => {
-      if (response.ok) {
-        console.log("Ringing...");
-      } else {
-        console.log("Something went wrong");
-      }
-    });
+    setCallState("outbound call");
+    let data: clientEvent = {
+      event: "outboundCall",
+      tn: outboundPhoneNumber,
+    };
+    client.send(JSON.stringify(data));
+    return true;
   };
 
   const updateTn = (element: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,7 +131,10 @@ const App: React.FC = () => {
   return (
     <div className="App">
       <header className="App-header">
-        <div>WebRTC Hello World</div>
+        <div>WebRTC Voice Calls - using asynchronous Bridge</div>
+        <div>
+          <span>Telephone number: {voiceApplicationPhoneNumber}</span>
+        </div>
         {remoteStream ? (
           <div>
             <div>
@@ -115,40 +153,41 @@ const App: React.FC = () => {
                   }
                 }}
               ></video>
-              Hooray! You're connected!
+              Media path - media connected...
             </div>
           </div>
         ) : (
           <div>
-            <span>connecting...</span>
+            <span>Media path - awaiting connection...</span>
           </div>
         )}
         <div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              alignItems: "center",
-            }}
-          >
-            <span>click to call from {voiceApplicationPhoneNumber}</span>
-            <button
-              style={{ height: "30px", marginLeft: "10px" }}
-              disabled={outboundPhoneNumber?.length === 0}
-              onClick={callOutboundPhoneNumber}
-            >
-              CALL
-            </button>
-            <input
-              type="text"
-              name="numberToDial"
-              id="numberToDial"
-              placeholder="enter a phone number"
-              style={{ height: "30px", marginLeft: "10px" }}
-              onChange={updateTn}
-            />
+          <div>
+            <span>Action:</span>
+            {callState === "idle" ? (
+              <React.Fragment>
+                <button
+                  style={{ height: "30px", marginLeft: "10px" }}
+                  disabled={outboundPhoneNumber?.length === 0}
+                  onClick={callOutboundPhoneNumber}
+                >
+                  CALL
+                </button>
+                <input
+                  type="text"
+                  name="numberToDial"
+                  id="numberToDial"
+                  placeholder="enter a phone number"
+                  style={{ height: "30px", marginLeft: "10px" }}
+                  onChange={updateTn}
+                />
+              </React.Fragment>
+            ) : (
+              <span>. . . . . .</span>
+            )}
           </div>
         </div>
+        <div>Call State: {callState}</div>
       </header>
     </div>
   );

@@ -131,7 +131,7 @@ const App: React.FC = () => {
   return (
     <div className="App">
       <header className="App-header">
-        <div>WebRTC Voice Calls - using asynchronous Bridge</div>
+        <div>WebRTC Voice Calls - using asynchronous bridge</div>
         <div>
           <span>Telephone number: {voiceApplicationPhoneNumber}</span>
         </div>
@@ -163,9 +163,9 @@ const App: React.FC = () => {
         )}
         <div>
           <div>
-            <span>Action:</span>
             {callState === "idle" ? (
               <React.Fragment>
+                <span>Action:</span>
                 <button
                   style={{ height: "30px", marginLeft: "10px" }}
                   disabled={outboundPhoneNumber?.length === 0}

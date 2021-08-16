@@ -1,5 +1,5 @@
 {
-  "name": "webrtc-hello-world",
+  "name": "webrtc-voicebridge",
   "version": "1.0.0",
   "description": "",
   "main": "./build/server.js",

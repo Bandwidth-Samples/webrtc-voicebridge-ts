@@ -16,7 +16,10 @@ const App: React.FC = () => {
   const [outboundPhoneNumber, setOutboundPhoneNumber] = useState<string>();
 
   // This state variable holds the remote stream object - the audio from the phone
-  const [remoteStream, setRemoteStream] = useState<RtcStream>();
+  // const [remoteStream, setRemoteStream] = useState<RtcStream>();
+  const [remoteStreams, setRemoteStreams] = useState<{
+    [key: string]: RtcStream;
+  }>({});
   // this state variable holds the call state for display purposes
   const [callState, setCallState] = useState<string>();
 
@@ -75,6 +78,9 @@ const App: React.FC = () => {
       bandwidthRtc
         .connect({
           deviceToken: token,
+        }, {
+          websocketUrl: 'wss://device-rtc.edge.bandwidth.com'
+          //websocketUrl: 'wss://7bq3tl9xu0.execute-api.us-east-1.amazonaws.com'
         })
         .then(async () => {
           console.log("connected to bandwidth webrtc!");
@@ -94,13 +100,21 @@ const App: React.FC = () => {
     // This event will fire any time a new stream is sent to us
     bandwidthRtc.onStreamAvailable((rtcStream: RtcStream) => {
       console.log("receiving audio!");
-      setRemoteStream(rtcStream);
+      setRemoteStreams(currentStreams => {
+        return {
+          ...currentStreams,
+          [rtcStream.endpointId]: rtcStream,
+        };
+      });
     });
 
     // This event will fire any time a stream is no longer being sent to us
-    bandwidthRtc.onStreamUnavailable((endpointId: string) => {
+    bandwidthRtc.onStreamUnavailable((streamId: string) => {
       console.log("no longer receiving audio");
-      setRemoteStream(undefined);
+      setRemoteStreams(currentStreams => {
+        const { [streamId]: removedStream, ...remainingStreams } = currentStreams;
+        return remainingStreams;
+      });
     });
   });
 
@@ -135,32 +149,34 @@ const App: React.FC = () => {
         <div>
           <span>Telephone number: {voiceApplicationPhoneNumber}</span>
         </div>
-        {remoteStream ? (
-          <div>
-            <div>
-              <video
-                playsInline
-                autoPlay
-                style={{ display: "none" }}
-                ref={(videoElement) => {
-                  if (
-                    videoElement &&
-                    remoteStream &&
-                    videoElement.srcObject !== remoteStream.mediaStream
-                  ) {
-                    // Set the video element's source object to the WebRTC MediaStream
-                    videoElement.srcObject = remoteStream.mediaStream;
-                  }
-                }}
-              ></video>
-              Media path - media connected...
-            </div>
-          </div>
-        ) : (
-          <div>
-            <span>Media path - awaiting connection...</span>
-          </div>
-        )}
+        Num keys: {Object.keys(remoteStreams).length}
+        {Object.values(remoteStreams).map((rtcStream: RtcStream, index) => {
+          return (
+                  <div>
+                    <div>
+                      Video Element:
+                      <video
+                          playsInline
+                          autoPlay
+                          style={{ display: "none" }}
+                          key={rtcStream.endpointId}
+                          ref={(videoElement) => {
+                            if (
+                                videoElement &&
+                                rtcStream.mediaStream &&
+                                videoElement.srcObject !== rtcStream.mediaStream
+                            ) {
+                              // Set the video element's source object to the WebRTC MediaStream
+                              videoElement.srcObject = rtcStream.mediaStream;
+                            }
+                          }}
+                      ></video>
+                      Media path - media connected...
+                    </div>
+                  </div>
+          )
+                })
+        }
         <div>
           <div>
             {callState === "idle" ? (

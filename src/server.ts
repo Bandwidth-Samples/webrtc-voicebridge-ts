@@ -1,27 +1,28 @@
 import path from "path";
 import dotenv from "dotenv";
-import express, { response } from "express";
+import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
 import {
-  Bridge,
-  SpeakSentence,
-  Pause,
+  ApiController as VoiceController,
   ApiCreateCallRequest,
   ApiModifyCallRequest,
+  Bridge,
   Client as VoiceClient,
-  ApiController as VoiceController,
+  Pause,
   Response,
+  SpeakSentence,
   State1Enum,
 } from "@bandwidth/voice";
 import {
+  ApiController as WebRtcController,
   Client as WebRtcClient,
-  Session,
+  DeviceApiVersionEnum,
+  Environment,
   Participant,
   PublishPermissionEnum,
+  Session,
   Subscriptions,
-  ApiController as WebRtcController,
-  DeviceApiVersionEnum,
 } from "@bandwidth/webrtc";
 import WebSocket from "ws";
 
@@ -40,6 +41,7 @@ const password = <string>process.env.BW_PASSWORD;
 const voiceApplicationPhoneNumber = <string>process.env.BW_NUMBER; // the 'from' number
 const voiceApplicationId = <string>process.env.BW_VOICE_APPLICATION_ID;
 const voiceCallbackUrl = <string>process.env.BASE_CALLBACK_URL;
+const httpServerUrl = <string>process.env.WEBRTC_HTTP_SERVER_URL || "https://api.webrtc.bandwidth.com/v1";
 
 // Check to make sure required environment variables are set
 if (!accountId || !username || !password) {
@@ -75,6 +77,8 @@ interface ClientEvent {
 const webRTCClient = new WebRtcClient({
   basicAuthUserName: username,
   basicAuthPassword: password,
+  environment: Environment.Custom,
+  baseUrl: httpServerUrl
 });
 const webRTCController = new WebRtcController(webRTCClient);
 
@@ -533,7 +537,8 @@ const callSipUri = async (participant: ParticipantInfo) => {
   try {
     const body = {
       from: voiceApplicationPhoneNumber,
-      to: "sip:sipx.webrtc.bandwidth.com:5060",
+      //to: "sip:sipx.webrtc.bandwidth.com:5060",
+      to: "sip:sipx-rtc.edge.bandwidth.com:5060",
       answerUrl: `${voiceCallbackUrl}/bridgeCallAnswered`,
       disconnectUrl: `${voiceCallbackUrl}/callStatus`,
       applicationId: voiceApplicationId,

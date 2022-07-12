@@ -1,4 +1,5 @@
 import path from "path";
+import {isEqual} from "lodash";
 import dotenv from "dotenv";
 import express, { response } from "express";
 import bodyParser from "body-parser";
@@ -55,9 +56,13 @@ interface ParticipantInfo {
 }
 
 interface CallData {
-  from: string;
-  to: string;
-  callType: string;
+  callType: string; 
+  bridgeParticipant: ParticipantInfo;
+  bridgeCallId?: string;
+  phoneCallId?: string;
+  phoneNumber?: string;
+  phoneCallAnswered: boolean;
+  webAgentNumber?: string;
 }
 
 interface CallState {
@@ -86,14 +91,20 @@ const voiceController = new VoiceController(voiceClient);
 
 let sessionId: string;
 let voiceCalls: Map<string, CallData> = new Map();
-let bridgeParticipant: ParticipantInfo;
+// let bridgeParticipant: ParticipantInfo;
 let webParticipant: ParticipantInfo;
 
 process.on("SIGINT", async function () {
-  if (bridgeParticipant) {
+
+  voiceCalls.forEach( async ( item ,key ) => {
+    const bridgeParticipant = item.bridgeParticipant;
     await killSipUriLeg(bridgeParticipant);
     await deleteParticipant(bridgeParticipant);
-  }
+    // console.log("deleting bridge participant: ", key);
+    voiceCalls.delete(key);
+  });
+
+  
   if (webParticipant) {
     await deleteParticipant(webParticipant);
   }
@@ -133,14 +144,22 @@ wss.on("connection", async function connection(ws, req) {
 app.post("/killConnection", async (req, res) => {
   res.send();
 
+  // if the web client hangs up it kills all of the other endpoints
+  // TODO - remove this restriction
+
   if (
     req.body.event === "onLeave" &&
     webParticipant &&
     req.body.participantId == webParticipant.id
   ) {
     console.log("deallocating all configured resources on exit");
-    await killSipUriLeg(bridgeParticipant);
-    await deleteParticipant(bridgeParticipant);
+    voiceCalls.forEach( async ( item ,key ) => {
+      const bridgeParticipant = item.bridgeParticipant;
+      await killSipUriLeg(bridgeParticipant);
+      await deleteParticipant(bridgeParticipant);
+      // console.log("deleting bridge participant: ", key);
+      voiceCalls.delete(key);
+    });
     await deleteParticipant(webParticipant);
     await deleteSession();
     if (clientWs) {
@@ -159,22 +178,19 @@ app.post("/incomingCall", async (req, res) => {
   updateCallStatus("inbound call");
 
   // setup the interconnection to webRTC
-  bridgeParticipant = await createParticipant("SIP Bridge connector");
+  const bridgeParticipant = await createParticipant("SIP Bridge connector");
   // start the Asynchronous creation of the interconnection between Programmable Voice and
   // WebRTC while we embark on completing the Programmable Voice handling
   // of the incomming call.
-  callSipUri(bridgeParticipant);
+
+  const data: CallData = createNewCallData( bridgeParticipant, "incoming" );
+  data.phoneCallId = req.body.callId;
+  data.phoneNumber = req.body.from;
+  // console.log ("*** CallData in incoming call:", data);
+  callSipUri(bridgeParticipant, data);
 
   // the bridgeCallAnswered will complete the interconnection once the second leg is set up.
-
-  const callId = req.body.callId;
-  const data: CallData = {
-    from: req.body.from,
-    to: req.body.to,
-    callType: "inbound",
-  };
-
-  voiceCalls.set(callId, data); // preserve the info on the inbound call leg in the calls map.
+  // we know that this is the initial creation of the CallData because incoming call is an initial event
 
   const speakSentence = new SpeakSentence({
     sentence: "We're finding the other party",
@@ -190,7 +206,7 @@ app.post("/incomingCall", async (req, res) => {
   const myResp: string = await response.toBxml();
 
   res.send(myResp);
-  console.log(`Bridging inbound call using Programmable Voice - ${callId}`);
+  console.log(`Bridging inbound call: ${req.body.callId}`);
 });
 
 /**
@@ -201,16 +217,23 @@ app.post("/callStatus", async (req, res) => {
   res.status(200).send();
 
   try {
+    // attempt to clean up the call to webrtc on all apparent disconnects from the phone
+    // or the webrtc sides.  If the resource is not present, then there is nothing to clean up.
+    // the leg is tied to the telephone number of the voice endpoint
     if (req.body.eventType === "disconnect") {
       const callId = req.body.callId;
-      console.log(`received disconnect event for call ${callId}`);
+      console.log(`Handling disconnect event for call ${callId}`);
 
-      const callData = voiceCalls.get(callId);
-      if (callData?.callType === "bridge") {
-        // results from disconnecting the bridge - clean up
-        deleteParticipant(bridgeParticipant);
-      }
-      voiceCalls.delete(callId);
+      const data: CallData | undefined = findCallFromWhatWeHave ({phoneCallId: callId});
+      const bridgeParticipant : ParticipantInfo | undefined = data?.bridgeParticipant;
+
+      if (bridgeParticipant) {
+        await killSipUriLeg(bridgeParticipant);
+        await deleteParticipant(bridgeParticipant);
+        // console.log("deleting bridge participant: ", bridgeParticipant.id);
+        voiceCalls.delete(bridgeParticipant.id);
+      };
+
     } else {
       console.log("received unexpected status update", req.body);
     }
@@ -229,14 +252,8 @@ app.post("/callAnswered", async (req, res) => {
     `received answered callback for outbound call ${callId} to ${req.body.to}`
   );
 
-  // preserve the info on the bridge leg in the calls map.
-  let data: CallData = {
-    from: req.body.from,
-    to: req.body.to,
-    callType: "outbound",
-  };
-
-  voiceCalls.set(callId, data);
+  // there should be a voiceCalls record that has been created for the bridge.
+  // find that record and 
 
   // This is the response payload that we will send back to the Voice API
   // to bridge the call into the WebRTC session
@@ -246,8 +263,16 @@ app.post("/callAnswered", async (req, res) => {
   });
   response.add(speakSentence);
 
-  const bridgecallId: string = findCall("bridge");
-  if (bridgecallId) {
+  let data: CallData | undefined = findCallFromWhatWeHave({phoneCallId:callId});
+  console.log("***Data in callanswered (1):", data);
+  if (data) data.phoneCallAnswered = true;
+  console.log("***Data in callanswered (2):", data);
+  data = findCallFromWhatWeHave({phoneCallId:callId});
+  console.log("***Data in callanswered (3):", data);
+
+
+  const bridgecallId: string | undefined = data?.bridgeCallId;
+  if (bridgecallId  && data?.phoneCallAnswered) {
     // the sipinterconnect call exists - bridge them
     const bridge = new Bridge({
       callId: bridgecallId,
@@ -255,16 +280,18 @@ app.post("/callAnswered", async (req, res) => {
     });
 
     response.add(bridge);
+    console.log(`Bridging outbound call - ${callId}`);
   } else {
     const pause = new Pause({
       duration: 120,
     });
     response.add(pause);
+    console.log(`Pausing to await the other call leg before bridging - ${callId}`);
   }
 
   let myResp: string = await response.toBxml();
-  console.log(`Bridging outbound call using Programmable Voice - ${callId}`);
-  console.log("BXML for the answered call: ", myResp);
+  
+  // console.log("BXML for the answered call: ", myResp);
 
   res.send(myResp);
 });
@@ -276,44 +303,40 @@ app.post("/callAnswered", async (req, res) => {
 app.post("/bridgeCallAnswered", async (req, res) => {
   const bridgeCallId = req.body.callId;
   console.log(
-    `received answered callback SIP to WebRTC Bridge ${bridgeCallId} to ${req.body.to}`
+    `Received answered callback from WebRTC ${bridgeCallId}`
   );
-
-  // preserve the info on the bridge leg in the calls map.
-  let data: CallData = {
-    from: req.body.from,
-    to: req.body.to,
-    callType: "bridge",
-  };
-
-  voiceCalls.set(bridgeCallId, data);
 
   const response = new Response();
   const speakSentence = new SpeakSentence({
     sentence: `a call is happening`,
   });
 
+  // TODO - this is a replica of the /callanswered logic - condense into a function
+  
   // if there is another call present, bridge it in, otherwise wait for another call.
-  const otherCallId = findCall("outbound") || findCall("inbound"); // look for any calls that are hanging around.
-  if (otherCallId) {
+  const callData: CallData|undefined =findCallFromWhatWeHave({bridgeCallId:bridgeCallId})  // look for any calls that are hanging around.
+  console.log("data in bridgeCallAnswered:", callData);
+  if (callData && callData.phoneCallId && callData.phoneCallAnswered) {
     // there is an existing voice call that should be bridged
     console.log(
-      "bridge the preexisting voice call: ",
-      otherCallId,
-      voiceCalls.get(otherCallId)
+      "Bridge the preexisting voice call: ",
+      callData.phoneCallId,
+      // callData
     );
     // the SIP call to the WebRTC side exists - bridge the two calls
     const bridge = new Bridge({
-      callId: otherCallId,
+      callId: callData.phoneCallId,
       // flip the 'endedness of the callback on hangup
       bridgeCompleteUrl: `${voiceCallbackUrl}/endBridgeLeg`,
     });
     response.add(bridge);
+    console.log("Bridging the calls in bridgeCallAnswered");
   } else {
     const pause = new Pause({
       duration: 120,
     });
     response.add(pause);
+    console.log("Pausing to wait for the other party in bridgeCallAnswered");
   }
 
   let myResp = await response.toBxml();
@@ -333,11 +356,18 @@ app.post("/endBridgeLeg", async (req, res) => {
     ) {
       // the cleanup should already have been done
       const callId = req.body.callId;
-      console.log(`received endBridgeLeg event for call ${callId}`);
+      console.log(`Received endBridgeLeg event for call ${callId}`);
+
+
+      const data: CallData | undefined = findCallFromWhatWeHave ({bridgeCallId: callId});
 
       // remove the SIP interconnect
-      await killSipUriLeg(bridgeParticipant);
-      await deleteParticipant(bridgeParticipant);
+      if (!data?.bridgeParticipant.id) {
+        console.log( "Can't find the bridge participant for ", callId);
+      } else {
+        await killSipUriLeg(data?.bridgeParticipant);
+        await deleteParticipant(data?.bridgeParticipant);
+      }
 
       const pause = new Pause({
         duration: 10,
@@ -472,7 +502,8 @@ const deleteSession = async () => {
       sessionId = "";
     } catch (e) {
       console.log("failed to delete session", sessionId);
-      console.log("error", e.response.status, e.response.data, e.config.url);
+      const err:any = e;
+      console.log("error", err.response.status, err.response.data, err.config.url);
     }
   }
 };
@@ -487,12 +518,13 @@ const deleteParticipant = async (participant: ParticipantInfo) => {
     }
     console.log(`Deleted Participant ${participant.id}`);
   } catch (e) {
-    if (e.statusCode === 404) {
+    const err:any = e;
+    if (err.statusCode === 404) {
       // participants can get deleted when the media server detects loss of session / media flows
       console.log("participant already deleted", participant.id);
     } else {
       console.log("failure to delete participant", participant?.id);
-      console.log("error", e.request, e.headers, e.statusCode, e.body);
+      console.log("error", err.request, err.headers, err.statusCode, err.body);
     }
   }
 };
@@ -502,7 +534,7 @@ const deleteParticipant = async (participant: ParticipantInfo) => {
  * with an answer callback that will conference the outbound call on the V2 voice
  * side of the infrastructure
  */
-const callPhone = async (phoneNumber: string) => {
+const callPhone = async (phoneNumber: string)  => {
   const createCallRequest: ApiCreateCallRequest = {
     from: voiceApplicationPhoneNumber,
     to: phoneNumber,
@@ -518,6 +550,7 @@ const callPhone = async (phoneNumber: string) => {
     const callId = response.result.callId;
     console.log(`initiated call ${callId} to ${phoneNumber}...`);
     updateCallStatus("outbound call");
+    return callId;
   } catch (e) {
     console.log(`error calling ${phoneNumber}: ${e}`);
   }
@@ -529,7 +562,8 @@ const callPhone = async (phoneNumber: string) => {
  * V2 voice and the webRTC infrastructure
  */
 // TODO - upgrade from axios when the SDK supports UUI
-const callSipUri = async (participant: ParticipantInfo) => {
+const callSipUri = async (participant: ParticipantInfo, data: CallData) => {
+
   try {
     const body = {
       from: voiceApplicationPhoneNumber,
@@ -552,12 +586,15 @@ const callSipUri = async (participant: ParticipantInfo) => {
     );
     const callId = response.data.callId;
     console.log(
-      `establishing a Voice call between Programmable Voice and WebRTC using ${callId}`
+      `Placing a SIP call to WebRTC using ${callId}`
     );
-    return response;
+    data.bridgeCallId = callId;
+
   } catch (e) {
     console.log(`error calling sip:sipx.webrtc.bandwidth.com:5060: ${e}`);
   }
+  // console.log("*** bridge record", data);
+  return data;
 };
 
 /**
@@ -566,22 +603,22 @@ const callSipUri = async (participant: ParticipantInfo) => {
  */
 const killSipUriLeg = async (participant: Participant) => {
   try {
-    // kill the call and the conference should come down when empty
-    // find the callId
 
-    const callId = findCall("bridge");
+    let  callData : CallData | undefined;
+    if (participant?.id) callData = voiceCalls.get(participant.id);
 
-    if (!callId) {
+    if (!participant) {
+      console.log(
+        "participant not found for sipx bridge - it must have been removed already"
+      ) 
+    } else if (!callData?.bridgeCallId) {
       console.log(
         "callId not found for sipx bridge - it must have been removed already"
       );
-    } else if (!participant) {
-      console.log(
-        "participant not found for sipx bridge - it must have been removed already"
-      );
     } else {
+      const callId = callData?.bridgeCallId;
       console.log(
-        `Removing the bridging SIP Call Leg - callId: ${callId} participant: ${participant.id}`
+        `Attempting to remove WebRTC SIP Call Leg - callId: ${callId} participant: ${participant.id}`
       );
 
       const modifyCallRequest: ApiModifyCallRequest = {
@@ -648,19 +685,29 @@ const placeACall = async (tn: string) => {
   // it is assumed that the bridge will succeed before the user answers and the
   //     answer is processed - the completion of the sip bridge could be
   //     waited on, but that will simply be treated as an error at this time.
-  bridgeParticipant = await createParticipant("SIP Bridge connector");
-  callSipUri(bridgeParticipant); // fire and forget
-  callPhone(outboundPhoneNumber); // fire and forget
+  const bridgeParticipant = await createParticipant("SIP Bridge connector");
+  const data: CallData = createNewCallData( bridgeParticipant, "outgoing", false );
+  data.phoneNumber = outboundPhoneNumber;
+  data.phoneCallId = await callPhone(outboundPhoneNumber);
+  console.log("***data in placecall", data);
+  callSipUri(bridgeParticipant, data); 
 };
 
-const findCall = (callType: string) => {
-  let callId: string = "";
-  for (let [key, value] of voiceCalls.entries()) {
-    if (value.callType === callType) {
-      callId = key;
-    }
-  }
-  return callId;
+const findCallFromWhatWeHave = (filterElements:any) :CallData | undefined => {
+  // console.log("*** findCallFromWhatWeHave:", filterElements);
+
+  let data:  CallData | undefined;
+
+  for (let [voiceCallKey, voiceCallValue] of voiceCalls.entries()) {
+    const newVersion = {...voiceCallValue, ...filterElements};
+    // console.log("***compare:", voiceCallValue, newVersion);
+    const result = isEqual( voiceCallValue, newVersion);
+    // console.log("***compare: ", result);
+    if (result) { data = voiceCallValue; }
+}
+
+  // console.log("*** findCallFromWhatWeHave returns", data);
+  return data;
 };
 
 const updateCallStatus = (state: string) => {
@@ -668,6 +715,20 @@ const updateCallStatus = (state: string) => {
     event: "callStateUpdate",
     callState: state,
   };
-  console.log("updating the call state", message);
+  console.log("Updating the call state in the client", message);
   clientWs.send(JSON.stringify(message));
 };
+
+const createNewCallData = (bridgeParticipant:ParticipantInfo, callType: string, answered:boolean = true) : CallData => {
+   
+  const data: CallData = {
+    bridgeParticipant: bridgeParticipant,
+    webAgentNumber: voiceApplicationPhoneNumber,
+    callType: callType,
+    phoneCallAnswered: answered
+  };
+
+  voiceCalls.set( bridgeParticipant.id, data) ;
+
+  return data;
+}

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import "./App.css";
 import { w3cwebsocket as W3CWebSocket } from "websocket";
-
 import BandwidthRtc, { RtcStream } from "@bandwidth/webrtc-browser";
 
 const client = new W3CWebSocket("ws://127.0.0.1:8001");
@@ -19,6 +18,7 @@ const App: React.FC = () => {
   const [remoteStream, setRemoteStream] = useState<RtcStream>();
   // this state variable holds the call state for display purposes
   const [callState, setCallState] = useState<string>();
+  const [rejected, setRejected] = useState<boolean>(false);
 
   // This effect connects to our server backend to get a device token
   // It will only run the first time this component renders
@@ -34,6 +34,7 @@ const App: React.FC = () => {
     token?: string;
     tn?: string;
     callState?: string;
+    message?: string;
   }
 
   interface clientEvent {
@@ -59,6 +60,12 @@ const App: React.FC = () => {
         }
         case "callStateUpdate": {
           setCallState(parsedMessage.callState);
+          break;
+        }
+        case "error": {
+          console.log(parsedMessage.message);
+          alert(parsedMessage.message);
+          setRejected(true)
           break;
         }
         default:
@@ -131,6 +138,7 @@ const App: React.FC = () => {
   return (
     <div className="App">
       <header className="App-header">
+      {(!rejected) ? (<React.Fragment>
         <div>WebRTC Voice Calls - using asynchronous bridge</div>
         <div>
           <span>Telephone number: {voiceApplicationPhoneNumber}</span>
@@ -188,8 +196,13 @@ const App: React.FC = () => {
           </div>
         </div>
         <div>Call State: {callState}</div>
+        </React.Fragment>
+        ):(
+          <div><span>Sorry Charlie</span></div>
+      )}
       </header>
     </div>
+
   );
 };
 

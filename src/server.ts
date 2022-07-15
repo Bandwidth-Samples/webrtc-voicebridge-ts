@@ -28,8 +28,11 @@ import WebSocket from "ws";
 
 dotenv.config();
 
+// TODO - confirm that the web client can leave an in-place session and another can join
+
 const app = express();
-app.use(bodyParser.json());
+// TODO app.use(bodyParser.json());
+app.use(express.json());
 
 const wss = new WebSocket.Server({ port: 8001 });
 let clientWs: WebSocket; // for the web client signalling websocket
@@ -70,6 +73,7 @@ interface CallState {
   token?: string;
   tn?: string;
   callState?: string;
+  message?: string;
 }
 
 interface ClientEvent {
@@ -91,8 +95,7 @@ const voiceController = new VoiceController(voiceClient);
 
 let sessionId: string;
 let voiceCalls: Map<string, CallData> = new Map();
-// let bridgeParticipant: ParticipantInfo;
-let webParticipant: ParticipantInfo;
+let webParticipant: ParticipantInfo | undefined;
 
 process.on("SIGINT", async function () {
 
@@ -119,22 +122,25 @@ process.on("SIGINT", async function () {
  * notification to be sent to that webclient.
  */
 wss.on("connection", async function connection(ws, req) {
-  registerWebClient(ws);
+  
+  if (await registerWebClient(ws)) {
+    ws.on("message", async function incoming(messageBuffer) {
+      const message: ClientEvent = JSON.parse(messageBuffer.toString());
+      console.log("handling an incoming client event:", message);
+      switch (message.event) {
+        case "outboundCall":
+          if (message.tn) placeACall(message.tn);
+          break;
+        default:
+          console.log("message from client not recognized: ", message);
+      }
+    });
+    ws.on("close", function closing(message) {
+      webParticipant = undefined;
+      console.log("closing the web client connection");
+    });
+  }
 
-  ws.on("message", async function incoming(messageBuffer) {
-    const message: ClientEvent = JSON.parse(messageBuffer.toString());
-    console.log("handling an incoming client event:", message);
-    switch (message.event) {
-      case "outboundCall":
-        if (message.tn) placeACall(message.tn);
-        break;
-      default:
-        console.log("message from client not recognized: ", message);
-    }
-  });
-  ws.on("close", function closing(message) {
-    console.log("closing the web client connection");
-  });
 });
 
 /**
@@ -263,13 +269,8 @@ app.post("/callAnswered", async (req, res) => {
   });
   response.add(speakSentence);
 
-  let data: CallData | undefined = findCallFromWhatWeHave({phoneCallId:callId});
-  console.log("***Data in callanswered (1):", data);
+  const data: CallData | undefined = findCallFromWhatWeHave({phoneCallId:callId});
   if (data) data.phoneCallAnswered = true;
-  console.log("***Data in callanswered (2):", data);
-  data = findCallFromWhatWeHave({phoneCallId:callId});
-  console.log("***Data in callanswered (3):", data);
-
 
   const bridgecallId: string | undefined = data?.bridgeCallId;
   if (bridgecallId  && data?.phoneCallAnswered) {
@@ -653,17 +654,30 @@ const killSipUriLeg = async (participant: Participant) => {
  * Initialize the relationship with the web client
  * @param ws the Websocket for communicating with the web client.
  */
-const registerWebClient = async (ws: WebSocket) => {
-  clientWs = ws; // formally remember the web socket for later use
-  webParticipant = await createParticipant("voice-bridge-browser");
-  const message: CallState = {
-    event: "registered",
-    token: webParticipant.token,
-    tn: voiceApplicationPhoneNumber,
-    callState: "idle",
-  };
-  console.log("Websocket connection established with web client");
-  ws.send(JSON.stringify(message));
+const registerWebClient = async (ws: WebSocket) : Promise<boolean> => {
+
+  if (!webParticipant) {
+    clientWs = ws; // formally remember the web socket for later use
+    webParticipant = await createParticipant("voice-bridge-browser");
+    const message: CallState = {
+      event: "registered",
+      token: webParticipant.token,
+      tn: voiceApplicationPhoneNumber,
+      callState: "idle",
+    };
+    console.log("Websocket connection established with web client");
+    ws.send(JSON.stringify(message));
+    return true;
+  } else {
+    const message: CallState = {
+      event: "error",
+      message: "Only one browser agent is allowed"
+    };
+    console.log("Second Websocket connection attempted and failed");
+    ws.send(JSON.stringify(message));
+    return false;
+  }
+
 };
 
 /**

@@ -14,11 +14,12 @@ const App: React.FC = () => {
     useState<string>();
   const [outboundPhoneNumber, setOutboundPhoneNumber] = useState<string>();
 
-  // This state variable holds the remote stream object - the audio from the phone
-  const [remoteStream, setRemoteStream] = useState<RtcStream>();
+  // This state variable holds the remote stream objects - the audio from the phones
+  const [remoteStreams, setRemoteStreams] = useState<Map<string, RtcStream>>(new Map());
   // this state variable holds the call state for display purposes
   const [callState, setCallState] = useState<string>();
   const [rejected, setRejected] = useState<boolean>(false);
+  const [audioStreamCount, setAudioStreamCount] = useState<number>(0);
 
   // This effect connects to our server backend to get a device token
   // It will only run the first time this component renders
@@ -101,13 +102,22 @@ const App: React.FC = () => {
     // This event will fire any time a new stream is sent to us
     bandwidthRtc.onStreamAvailable((rtcStream: RtcStream) => {
       console.log("receiving audio!");
-      setRemoteStream(rtcStream);
+      const oldStreams : Map<string, RtcStream> = remoteStreams;
+      oldStreams.set(rtcStream.endpointId, rtcStream);
+      setRemoteStreams(oldStreams);
+      console.log("in on-stream-available", remoteStreams.size);
+      setAudioStreamCount(remoteStreams.size);
     });
 
     // This event will fire any time a stream is no longer being sent to us
     bandwidthRtc.onStreamUnavailable((endpointId: string) => {
       console.log("no longer receiving audio");
-      setRemoteStream(undefined);
+      const oldStreams : Map<string, RtcStream> = remoteStreams;
+      if (!oldStreams.delete(endpointId)) {
+        console.log(`Failed to delete RTC Stream with endpoint ID ${endpointId}`);
+      };
+      setRemoteStreams(oldStreams);
+      setAudioStreamCount(remoteStreams.size);
     });
   });
 
@@ -143,24 +153,30 @@ const App: React.FC = () => {
         <div>
           <span>Telephone number: {voiceApplicationPhoneNumber}</span>
         </div>
-        {remoteStream ? (
+        {/* {remoteStreams.size} {audioStreamCount} */}
+        {(remoteStreams.size > 0) ? (
           <div>
             <div>
-              <video
-                playsInline
-                autoPlay
-                style={{ display: "none" }}
-                ref={(videoElement) => {
-                  if (
-                    videoElement &&
-                    remoteStream &&
-                    videoElement.srcObject !== remoteStream.mediaStream
-                  ) {
-                    // Set the video element's source object to the WebRTC MediaStream
-                    videoElement.srcObject = remoteStream.mediaStream;
-                  }
-                }}
-              ></video>
+              {[...remoteStreams.values()].map((remoteStream) => {
+                // const remoteStream = remoteStreams.get(remoteStreamKey);
+                // console.log('remoteStream: ',remoteStream);
+                return (<video
+                  playsInline
+                  autoPlay
+                  style={{ display: "none" }}
+                  ref={(videoElement) => {
+                    // console.log("videoElement: ", videoElement);
+                    if (
+                      videoElement &&
+                      remoteStream &&
+                      videoElement.srcObject !== remoteStream.mediaStream
+                    ) {
+                      // Set the video element's source object to the WebRTC MediaStream
+                      videoElement.srcObject = remoteStream.mediaStream;
+                    }
+                  }}
+                ></video>)
+              })}
               Media path - media connected...
             </div>
           </div>

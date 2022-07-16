@@ -177,7 +177,7 @@ const App: React.FC = () => {
                   }}
                 ></video>)
               })}
-              Media path - media connected...
+              Media Connected {audioStreamCount} Participants
             </div>
           </div>
         ) : (
@@ -187,7 +187,7 @@ const App: React.FC = () => {
         )}
         <div>
           <div>
-            {callState === "idle" ? (
+            {/* {callState === "idle" ? ( */}
               <React.Fragment>
                 <span>Action:</span>
                 <button
@@ -206,9 +206,9 @@ const App: React.FC = () => {
                   onChange={updateTn}
                 />
               </React.Fragment>
-            ) : (
-              <span>. . . . . .</span>
-            )}
+            {/* // ) : (
+            //   <span>. . . . . .</span>
+            // )} */}
           </div>
         </div>
         <div>Call State: {callState}</div>

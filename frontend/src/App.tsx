@@ -3,6 +3,7 @@ import "./App.css";
 import { w3cwebsocket as W3CWebSocket } from "websocket";
 
 import BandwidthRtc, { RtcStream } from "@bandwidth/webrtc-browser";
+import Participant from "./Participant";
 
 const client = new W3CWebSocket("ws://127.0.0.1:8001");
 
@@ -16,7 +17,6 @@ const App: React.FC = () => {
   const [outboundPhoneNumber, setOutboundPhoneNumber] = useState<string>();
 
   // This state variable holds the remote stream object - the audio from the phone
-  // const [remoteStream, setRemoteStream] = useState<RtcStream>();
   const [remoteStreams, setRemoteStreams] = useState<{
     [key: string]: RtcStream;
   }>({});
@@ -78,10 +78,12 @@ const App: React.FC = () => {
       bandwidthRtc
         .connect({
           deviceToken: token,
-        }, {
-          websocketUrl: 'wss://device-rtc.edge.bandwidth.com'
-          //websocketUrl: 'wss://7bq3tl9xu0.execute-api.us-east-1.amazonaws.com'
-        })
+        },
+        // Uncomment to supply a custom URL
+        // {
+        //   websocketUrl: ''
+        // }
+        )
         .then(async () => {
           console.log("connected to bandwidth webrtc!");
           // Publish the browser's microphone
@@ -149,34 +151,20 @@ const App: React.FC = () => {
         <div>
           <span>Telephone number: {voiceApplicationPhoneNumber}</span>
         </div>
-        Num keys: {Object.keys(remoteStreams).length}
-        {Object.values(remoteStreams).map((rtcStream: RtcStream, index) => {
-          return (
-                  <div>
-                    <div>
-                      Video Element:
-                      <video
-                          playsInline
-                          autoPlay
-                          style={{ display: "none" }}
-                          key={rtcStream.endpointId}
-                          ref={(videoElement) => {
-                            if (
-                                videoElement &&
-                                rtcStream.mediaStream &&
-                                videoElement.srcObject !== rtcStream.mediaStream
-                            ) {
-                              // Set the video element's source object to the WebRTC MediaStream
-                              videoElement.srcObject = rtcStream.mediaStream;
-                            }
-                          }}
-                      ></video>
-                      Media path - media connected...
-                    </div>
-                  </div>
-          )
-                })
-        }
+        {Object.keys(remoteStreams).length > 0 ? (
+          Object.values(remoteStreams).map((rtcStream: RtcStream, index) => {
+            return (
+                <Participant
+                    key={index}
+                    rtcStream={rtcStream}
+                />
+            )
+          })
+        ) : (
+            <div>
+              No calls connected
+            </div>
+        )}
         <div>
           <div>
             {callState === "idle" ? (

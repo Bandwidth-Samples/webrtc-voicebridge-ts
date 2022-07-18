@@ -43,6 +43,13 @@ const voiceApplicationId = <string>process.env.BW_VOICE_APPLICATION_ID;
 const voiceCallbackUrl = <string>process.env.BASE_CALLBACK_URL;
 const httpServerUrl = <string>process.env.WEBRTC_HTTP_SERVER_URL || "https://api.webrtc.bandwidth.com/v1";
 
+/*
+ * To use a non-production environment, update the following with custom URLs and values:
+ * - The creation of the WebRTCClient below
+ * - The sipUri value in callSipUri()
+ * - The websocketUrl supplied to BandwidthRtc.connect() (in frontend/src/App.tsx)
+ */
+
 // Check to make sure required environment variables are set
 if (!accountId || !username || !password) {
   console.error(
@@ -77,8 +84,9 @@ interface ClientEvent {
 const webRTCClient = new WebRtcClient({
   basicAuthUserName: username,
   basicAuthPassword: password,
-  environment: Environment.Custom,
-  baseUrl: httpServerUrl
+  // Uncomment to use a custom URL
+  // environment: Environment.Custom,
+  // baseUrl: httpServerUrl
 });
 const webRTCController = new WebRtcController(webRTCClient);
 
@@ -535,10 +543,10 @@ const callPhone = async (phoneNumber: string) => {
 // TODO - upgrade from axios when the SDK supports UUI
 const callSipUri = async (participant: ParticipantInfo) => {
   try {
+    const sipUri = "sip:sipx.webrtc.bandwidth.com:5060";
     const body = {
       from: voiceApplicationPhoneNumber,
-      //to: "sip:sipx.webrtc.bandwidth.com:5060",
-      to: "sip:sipx-rtc.edge.bandwidth.com:5060",
+      to: sipUri,
       answerUrl: `${voiceCallbackUrl}/bridgeCallAnswered`,
       disconnectUrl: `${voiceCallbackUrl}/callStatus`,
       applicationId: voiceApplicationId,

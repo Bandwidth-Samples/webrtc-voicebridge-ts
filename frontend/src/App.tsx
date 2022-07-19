@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import "./App.css";
 import { w3cwebsocket as W3CWebSocket } from "websocket";
 import BandwidthRtc, { RtcStream } from "@bandwidth/webrtc-browser";
+import AudioStreamPlayer from "./audioStreamPlayer";
 
 const client = new W3CWebSocket("ws://127.0.0.1:8001");
 
@@ -105,7 +106,6 @@ const App: React.FC = () => {
       const oldStreams : Map<string, RtcStream> = remoteStreams;
       oldStreams.set(rtcStream.endpointId, rtcStream);
       setRemoteStreams(oldStreams);
-      console.log("in on-stream-available", remoteStreams.size);
       setAudioStreamCount(remoteStreams.size);
     });
 
@@ -141,10 +141,6 @@ const App: React.FC = () => {
     console.log(outboundPhoneNumber);
   };
 
-  // was checking for the existence of remoteStream
-
-  console.log(outboundPhoneNumber, outboundPhoneNumber?.length);
-
   return (
     <div className="App">
       <header className="App-header">
@@ -153,31 +149,13 @@ const App: React.FC = () => {
         <div>
           <span>Telephone number: {voiceApplicationPhoneNumber}</span>
         </div>
-        {/* {remoteStreams.size} {audioStreamCount} */}
         {(remoteStreams.size > 0) ? (
           <div>
             <div>
               {[...remoteStreams.values()].map((remoteStream) => {
-                // const remoteStream = remoteStreams.get(remoteStreamKey);
-                // console.log('remoteStream: ',remoteStream);
-                return (<video
-                  playsInline
-                  autoPlay
-                  style={{ display: "none" }}
-                  ref={(videoElement) => {
-                    // console.log("videoElement: ", videoElement);
-                    if (
-                      videoElement &&
-                      remoteStream &&
-                      videoElement.srcObject !== remoteStream.mediaStream
-                    ) {
-                      // Set the video element's source object to the WebRTC MediaStream
-                      videoElement.srcObject = remoteStream.mediaStream;
-                    }
-                  }}
-                ></video>)
+                return(<AudioStreamPlayer rtcStream = {remoteStream} />)
               })}
-              Media Connected {audioStreamCount} Participants
+              Media Connected - {audioStreamCount} Participants
             </div>
           </div>
         ) : (
@@ -187,7 +165,6 @@ const App: React.FC = () => {
         )}
         <div>
           <div>
-            {/* {callState === "idle" ? ( */}
               <React.Fragment>
                 <span>Action:</span>
                 <button
@@ -206,9 +183,6 @@ const App: React.FC = () => {
                   onChange={updateTn}
                 />
               </React.Fragment>
-            {/* // ) : (
-            //   <span>. . . . . .</span>
-            // )} */}
           </div>
         </div>
         <div>Call State: {callState}</div>

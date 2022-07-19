@@ -180,7 +180,7 @@ app.post("/killConnection", async (req, res) => {
  * (long story - see setup in the README)
  */
 app.post("/incomingCall", async (req, res) => {
-  console.log(`incoming call received from ${req.body.from}`);
+  console.log(`\nIncoming call received from ${req.body.from}`);
   updateCallStatus("inbound call");
 
   // setup the interconnection to webRTC
@@ -212,7 +212,7 @@ app.post("/incomingCall", async (req, res) => {
   const myResp: string = await response.toBxml();
 
   res.send(myResp);
-  console.log(`Bridging inbound call: ${req.body.callId}`);
+  console.log(`\nBridging inbound call to WebRTC: ${req.body.callId}`);
 });
 
 /**
@@ -228,7 +228,7 @@ app.post("/callStatus", async (req, res) => {
     // the leg is tied to the telephone number of the voice endpoint
     if (req.body.eventType === "disconnect") {
       const callId = req.body.callId;
-      console.log(`Handling disconnect event for call ${callId}`);
+      console.log(`\nHandling disconnect event for call ${callId}`);
 
       const data: CallData | undefined = findCallFromWhatWeHave ({phoneCallId: callId});
       const bridgeParticipant : ParticipantInfo | undefined = data?.bridgeParticipant;
@@ -316,11 +316,10 @@ app.post("/bridgeCallAnswered", async (req, res) => {
   
   // if there is another call present, bridge it in, otherwise wait for another call.
   const callData: CallData|undefined =findCallFromWhatWeHave({bridgeCallId:bridgeCallId})  // look for any calls that are hanging around.
-  console.log("data in bridgeCallAnswered:", callData);
   if (callData && callData.phoneCallId && callData.phoneCallAnswered) {
     // there is an existing voice call that should be bridged
     console.log(
-      "Bridge the preexisting voice call: ",
+      "Bridging the preexisting voice call: ",
       callData.phoneCallId,
       // callData
     );
@@ -331,7 +330,6 @@ app.post("/bridgeCallAnswered", async (req, res) => {
       bridgeCompleteUrl: `${voiceCallbackUrl}/endBridgeLeg`,
     });
     response.add(bridge);
-    console.log("Bridging the calls in bridgeCallAnswered");
   } else {
     const pause = new Pause({
       duration: 120,

@@ -174,7 +174,7 @@ const App: React.FC = () => {
               <React.Fragment>
                 <span>Action:</span>
                 <button
-                  style={{ height: "30px", marginLeft: "10px" }}
+                  style={{ height: "30px", marginLeft: "10px", verticalAlign: "middle" }}
                   disabled={outboundPhoneNumber?.length === 0}
                   onClick={callOutboundPhoneNumber}
                 >
@@ -185,7 +185,7 @@ const App: React.FC = () => {
                   name="numberToDial"
                   id="numberToDial"
                   placeholder="enter a phone number"
-                  style={{ height: "30px", marginLeft: "10px" }}
+                  style={{ height: "30px", marginLeft: "10px", verticalAlign: "middle" }}
                   onChange={updateTn}
                 />
               </React.Fragment>

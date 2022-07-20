@@ -138,7 +138,7 @@ wss.on("connection", async function connection(ws, req) {
   if (await registerWebClient(ws)) {
     ws.on("message", async function incoming(messageBuffer) {
       const message: ClientEvent = JSON.parse(messageBuffer.toString());
-      console.log("handling an incoming client event:", message);
+      console.log("\nhandling an incoming client event:", message);
       switch (message.event) {
         case "outboundCall":
           if (message.tn) placeACall(message.tn);
@@ -293,7 +293,7 @@ app.post("/callAnswered", async (req, res) => {
     });
 
     response.add(bridge);
-    console.log(`Bridging outbound call - ${callId}`);
+    console.log(`Bridging outbound call - ${bridgecallId} to ${callId}`);
   } else {
     const pause = new Pause({
       duration: 120,
@@ -304,7 +304,7 @@ app.post("/callAnswered", async (req, res) => {
 
   let myResp: string = await response.toBxml();
   
-  // console.log("BXML for the answered call: ", myResp);
+  console.log("***BXML for the answered call: ", myResp);
 
   res.send(myResp);
 });
@@ -378,6 +378,7 @@ app.post("/endBridgeLeg", async (req, res) => {
       } else {
         await killSipUriLeg(data?.bridgeParticipant);
         await deleteParticipant(data?.bridgeParticipant);
+        voiceCalls.delete(data.bridgeParticipant.id);
       }
 
       const pause = new Pause({
@@ -390,7 +391,8 @@ app.post("/endBridgeLeg", async (req, res) => {
 
       let myResp = await response.toBxml();
       res.send(myResp);
-      updateCallStatus("idle");
+      console.log("*** voicecalls.size before idle", voiceCalls.size);
+      if (voiceCalls.size === 0) updateCallStatus("idle");
     } else {
       console.log("received unexpected bridge status update", req.body);
       res.status(200).send();
@@ -714,7 +716,7 @@ const placeACall = async (tn: string) => {
   const data: CallData = createNewCallData( bridgeParticipant, "outgoing", false );
   data.phoneNumber = outboundPhoneNumber;
   data.phoneCallId = await callPhone(outboundPhoneNumber);
-  console.log("***data in placecall", data);
+  // console.log("***data in placecall", data);
   callSipUri(bridgeParticipant, data); 
 };
 

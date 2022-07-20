@@ -84,7 +84,12 @@ const App: React.FC = () => {
       bandwidthRtc
         .connect({
           deviceToken: token,
-        })
+        },
+        // Uncomment to supply a custom URL
+        // {
+        //   websocketUrl: ''
+        // }
+        )
         .then(async () => {
           console.log("connected to bandwidth webrtc!");
           // Publish the browser's microphone
@@ -102,7 +107,7 @@ const App: React.FC = () => {
   useEffect(() => {
     // This event will fire any time a new stream is sent to us
     bandwidthRtc.onStreamAvailable((rtcStream: RtcStream) => {
-      console.log("receiving audio!");
+      console.log("receiving audio!", rtcStream);
       const oldStreams : Map<string, RtcStream> = remoteStreams;
       oldStreams.set(rtcStream.endpointId, rtcStream);
       setRemoteStreams(oldStreams);
@@ -110,11 +115,11 @@ const App: React.FC = () => {
     });
 
     // This event will fire any time a stream is no longer being sent to us
-    bandwidthRtc.onStreamUnavailable((endpointId: string) => {
-      console.log("no longer receiving audio");
+    bandwidthRtc.onStreamUnavailable((streamId: string) => {
+      console.log("no longer receiving audio", streamId);
       const oldStreams : Map<string, RtcStream> = remoteStreams;
-      if (!oldStreams.delete(endpointId)) {
-        console.log(`Failed to delete RTC Stream with endpoint ID ${endpointId}`);
+      if (!oldStreams.delete(streamId)) {
+        console.log(`Failed to delete RTC Stream with endpoint ID ${streamId}`);
       };
       setRemoteStreams(oldStreams);
       setAudioStreamCount(remoteStreams.size);
@@ -153,15 +158,16 @@ const App: React.FC = () => {
           <div>
             <div>
               {[...remoteStreams.values()].map((remoteStream) => {
+                console.log("displaying remote stream", remoteStream)
                 return(<AudioStreamPlayer rtcStream = {remoteStream} />)
               })}
               Media Connected - {audioStreamCount} Participants
             </div>
           </div>
         ) : (
-          <div>
-            <span>Media path - awaiting connection...</span>
-          </div>
+            <div>
+              No calls connected
+            </div>
         )}
         <div>
           <div>

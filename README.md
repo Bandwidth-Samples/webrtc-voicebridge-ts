@@ -33,6 +33,12 @@ This sample application establishes both inbound and outbound calls in an asynch
 > Note: This is a very simplistic demo and it is not designed to handle multiple browsers or multiple phones.
 > Unless you are running on `localhost`, you will need to use HTTPS. Most modern browsers require a secure context when accessing cameras and microphones.
 
+## An **IMPORTANT NOTE** about WebRTC Audio streams and browsers
+
+One of the factors impacting WebRTC solutions is the way that streams of audio are handled by the browser.  The server may control the list of participants that are involved in a session, and control which endpoint receives which media stream, **but the browser client is responsible for responding to all of the streams that it receives.  If there are multiple participants sending audio to a browser, there will be multiple streams presented to the browser, and the browser needs to present them all to the DOM.**  You will see this behavior in this sample in the way in which the audioStreamPlayer is called multiple times for multiple streams.
+
+This allows for uniform handling of audio and video streams, and the uniform handling of streams that transition from one state to another.
+
 ## Setting things up
 
 To run this sample, you'll need a Bandwidth phone number, Voice API credentials and WebRTC enabled for your account. Please check with your account manager to ensure you are provisioned for WebRTC.

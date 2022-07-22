@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import "./App.css";
 import { w3cwebsocket as W3CWebSocket } from "websocket";
-
 import BandwidthRtc, { RtcStream } from "@bandwidth/webrtc-browser";
+import AudioStreamPlayer from "./audioStreamPlayer";
 
 const client = new W3CWebSocket("ws://127.0.0.1:8001");
 
@@ -15,10 +15,12 @@ const App: React.FC = () => {
     useState<string>();
   const [outboundPhoneNumber, setOutboundPhoneNumber] = useState<string>();
 
-  // This state variable holds the remote stream object - the audio from the phone
-  const [remoteStream, setRemoteStream] = useState<RtcStream>();
+  // This state variable holds the remote stream objects - the audio from the phones
+  const [remoteStreams, setRemoteStreams] = useState<Map<string, RtcStream>>(new Map());
   // this state variable holds the call state for display purposes
   const [callState, setCallState] = useState<string>();
+  const [rejected, setRejected] = useState<boolean>(false);
+  const [audioStreamCount, setAudioStreamCount] = useState<number>(0);
 
   // This effect connects to our server backend to get a device token
   // It will only run the first time this component renders
@@ -34,6 +36,7 @@ const App: React.FC = () => {
     token?: string;
     tn?: string;
     callState?: string;
+    message?: string;
   }
 
   interface clientEvent {
@@ -61,6 +64,12 @@ const App: React.FC = () => {
           setCallState(parsedMessage.callState);
           break;
         }
+        case "error": {
+          console.log(parsedMessage.message);
+          alert(parsedMessage.message);
+          setRejected(true)
+          break;
+        }
         default:
           console.log("error - server message not understood: ", parsedMessage);
       }
@@ -75,7 +84,12 @@ const App: React.FC = () => {
       bandwidthRtc
         .connect({
           deviceToken: token,
-        })
+        },
+        // Uncomment to supply a custom URL
+        // {
+        //   websocketUrl: ''
+        // }
+        )
         .then(async () => {
           console.log("connected to bandwidth webrtc!");
           // Publish the browser's microphone
@@ -93,14 +107,22 @@ const App: React.FC = () => {
   useEffect(() => {
     // This event will fire any time a new stream is sent to us
     bandwidthRtc.onStreamAvailable((rtcStream: RtcStream) => {
-      console.log("receiving audio!");
-      setRemoteStream(rtcStream);
+      console.log("receiving audio!", rtcStream);
+      const oldStreams : Map<string, RtcStream> = remoteStreams;
+      oldStreams.set(rtcStream.endpointId, rtcStream);
+      setRemoteStreams(oldStreams);
+      setAudioStreamCount(remoteStreams.size);
     });
 
     // This event will fire any time a stream is no longer being sent to us
-    bandwidthRtc.onStreamUnavailable((endpointId: string) => {
-      console.log("no longer receiving audio");
-      setRemoteStream(undefined);
+    bandwidthRtc.onStreamUnavailable((streamId: string) => {
+      console.log("no longer receiving audio", streamId);
+      const oldStreams : Map<string, RtcStream> = remoteStreams;
+      if (!oldStreams.delete(streamId)) {
+        console.log(`Failed to delete RTC Stream with endpoint ID ${streamId}`);
+      };
+      setRemoteStreams(oldStreams);
+      setAudioStreamCount(remoteStreams.size);
     });
   });
 
@@ -124,50 +146,35 @@ const App: React.FC = () => {
     console.log(outboundPhoneNumber);
   };
 
-  // was checking for the existence of remoteStream
-
-  console.log(outboundPhoneNumber, outboundPhoneNumber?.length);
-
   return (
     <div className="App">
       <header className="App-header">
+      {(!rejected) ? (<React.Fragment>
         <div>WebRTC Voice Calls - using asynchronous bridge</div>
         <div>
           <span>Telephone number: {voiceApplicationPhoneNumber}</span>
         </div>
-        {remoteStream ? (
+        {(remoteStreams.size > 0) ? (
           <div>
             <div>
-              <video
-                playsInline
-                autoPlay
-                style={{ display: "none" }}
-                ref={(videoElement) => {
-                  if (
-                    videoElement &&
-                    remoteStream &&
-                    videoElement.srcObject !== remoteStream.mediaStream
-                  ) {
-                    // Set the video element's source object to the WebRTC MediaStream
-                    videoElement.srcObject = remoteStream.mediaStream;
-                  }
-                }}
-              ></video>
-              Media path - media connected...
+              {[...remoteStreams.values()].map((remoteStream) => {
+                console.log("displaying remote stream", remoteStream)
+                return(<AudioStreamPlayer rtcStream = {remoteStream} />)
+              })}
+              Media Connected - {audioStreamCount} Participants
             </div>
           </div>
         ) : (
-          <div>
-            <span>Media path - awaiting connection...</span>
-          </div>
+            <div>
+              No calls connected
+            </div>
         )}
         <div>
           <div>
-            {callState === "idle" ? (
               <React.Fragment>
                 <span>Action:</span>
                 <button
-                  style={{ height: "30px", marginLeft: "10px" }}
+                  style={{ height: "30px", marginLeft: "10px", verticalAlign: "middle" }}
                   disabled={outboundPhoneNumber?.length === 0}
                   onClick={callOutboundPhoneNumber}
                 >
@@ -178,18 +185,20 @@ const App: React.FC = () => {
                   name="numberToDial"
                   id="numberToDial"
                   placeholder="enter a phone number"
-                  style={{ height: "30px", marginLeft: "10px" }}
+                  style={{ height: "30px", marginLeft: "10px", verticalAlign: "middle" }}
                   onChange={updateTn}
                 />
               </React.Fragment>
-            ) : (
-              <span>. . . . . .</span>
-            )}
           </div>
         </div>
         <div>Call State: {callState}</div>
+        </React.Fragment>
+        ):(
+          <div><span>Sorry Charlie</span></div>
+      )}
       </header>
     </div>
+
   );
 };
 
